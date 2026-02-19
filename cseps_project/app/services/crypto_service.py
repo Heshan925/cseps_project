@@ -1,80 +1,100 @@
-from cryptography.hazmat.primitives.asymmetric import ec
-from cryptography.hazmat.primitives import serialization, hashes
+import secrets
+from tinyec import registry, ec
 
+# Load the standard SECP256R1 curve
+curve = registry.get_curve('secp256r1')
+
+# ==========================================
+# 1. KEY GENERATION
+# ==========================================
 def generate_ecc_keypair():
-    """Generates an ECC private and public key pair."""
-    private_key = ec.generate_private_key(ec.SECP384R1())
-    public_key = private_key.public_key()
+    """Generates a private integer and a public curve point."""
+    private_key = secrets.randbelow(curve.field.n)
+    public_key = private_key * curve.g
+    return private_key, public_key
 
-    pem_private_key = private_key.private_bytes(
-        encoding=serialization.Encoding.PEM,
-        format=serialization.PrivateFormat.PKCS8,
-        encryption_algorithm=serialization.NoEncryption()
-    )
-    pem_public_key = public_key.public_bytes(
-        encoding=serialization.Encoding.PEM,
-        format=serialization.PublicFormat.SubjectPublicKeyInfo
-    )
-    return pem_private_key, pem_public_key
+# ==========================================
+# 2. KOBLITZ ENCODING (Map Bid to Curve)
+# ==========================================
+def modular_sqrt(a, p):
+    """Finds the square root of a number in a finite field."""
+    # Since secp256r1 prime p % 4 == 3, we can use Fermat's Little Theorem
+    return pow(a, (p + 1) // 4, p)
 
-
-def sign_bid(pem_private_key: bytes, bid_data: str) -> bytes:
-    """
-    Signs the bid document using the bidder's private key.
-    This guarantees non-repudiation.
-    """
-    # 1. Load the private key from the PEM format
-    private_key = serialization.load_pem_private_key(
-        pem_private_key, 
-        password=None
-    )
+def map_bid_to_point(bid_amount: int) -> ec.Point:
+    """Embeds the numeric bid amount into an (X, Y) coordinate on the curve."""
+    K = 1000  # Scaling factor
+    p = curve.field.p
     
-    # 2. Generate the signature using ECDSA and SHA256 hashing
-    signature = private_key.sign(
-        bid_data.encode('utf-8'),
-        ec.ECDSA(hashes.SHA256())
-    )
-    return signature
+    # Try different offsets until we find a valid X coordinate that sits on the curve
+    for j in range(K):
+        x = (bid_amount * K + j) % p
+        # Curve equation: y^2 = x^3 + a*x + b
+        y_sq = (pow(x, 3, p) + curve.a * x + curve.b) % p
+        
+        # Check if y_sq has a valid square root (Euler's criterion)
+        if pow(y_sq, (p - 1) // 2, p) == 1:
+            y = modular_sqrt(y_sq, p)
+            return ec.Point(curve, x, y)
+            
+    raise ValueError("Could not map the bid to a curve point.")
 
+def unmap_point_to_bid(point: ec.Point) -> int:
+    """Extracts the numeric bid from the curve coordinate."""
+    K = 1000
+    return point.x // K
 
-def verify_signature(pem_public_key: bytes, bid_data: str, signature: bytes) -> bool:
-    """
-    Verifies that the bid was signed by the owner of the public key 
-    and hasn't been tampered with.
-    """
-    # 1. Load the public key from the PEM format
-    public_key = serialization.load_pem_public_key(pem_public_key)
+# ==========================================
+# 3. PURE ECC ENCRYPTION (EC-ElGamal)
+# ==========================================
+def encrypt_bid_ecc(public_key: ec.Point, bid_amount: int):
+    """Encrypts the bid directly using pure EC-ElGamal."""
+    # 1. Map the bid integer to a Point (Pm)
+    Pm = map_bid_to_point(bid_amount)
     
-    try:
-        # 2. Attempt to verify. If the data or signature is bad, this throws an error.
-        public_key.verify(
-            signature,
-            bid_data.encode('utf-8'),
-            ec.ECDSA(hashes.SHA256())
-        )
-        return True # Signature is valid!
-    except Exception:
-        return False # Signature is invalid/tampered!
+    # 2. Choose a random ephemeral integer 'k'
+    k = secrets.randbelow(curve.field.n)
+    
+    # 3. Calculate Ciphertext 1: C1 = k * Generator
+    C1 = k * curve.g
+    
+    # 4. Calculate Ciphertext 2: C2 = Pm + (k * Public_Key)
+    C2 = Pm + (k * public_key)
+    
+    return C1, C2
 
+def decrypt_bid_ecc(private_key: int, C1: ec.Point, C2: ec.Point) -> int:
+    """Decrypts the cipher points back to the original bid amount."""
+    # 1. Calculate the shared mask: S = private_key * C1
+    S = private_key * C1
+    
+    # 2. Negate the Y coordinate of S to allow subtraction
+    S_neg = ec.Point(curve, S.x, -S.y % curve.field.p)
+    
+    # 3. Retrieve the mapped point: Pm = C2 - S
+    Pm = C2 + S_neg
+    
+    # 4. Extract the integer bid from the point
+    return unmap_point_to_bid(Pm)
 
-# --- Testing the Digital Signatures ---
+# --- Testing Pure ECC ---
 if __name__ == "__main__":
-    print("1. Generating Bidder Keys...")
-    bidder_priv, bidder_pub = generate_ecc_keypair()
+    print("1. Generating Master Evaluator Keys...")
+    master_priv, master_pub = generate_ecc_keypair()
     
-    # The proposal the bidder wants to submit
-    proposal = "I bid $50,000 to build the government database."
-    print(f"2. Original Proposal: '{proposal}'")
+    # The pure numeric bid
+    original_bid = 1500000 
+    print(f"\n2. Original Bid Amount: ${original_bid:,}")
     
-    print("3. Bidder signs the proposal...")
-    digital_signature = sign_bid(bidder_priv, proposal)
-    print(f"   Signature generated: {digital_signature[:15]}... (truncated)")
+    print("\n3. Bidders submits pure ECC Encrypted bid...")
+    C1, C2 = encrypt_bid_ecc(master_pub, original_bid)
     
-    print("4. Server verifies the signature...")
-    is_valid = verify_signature(bidder_pub, proposal, digital_signature)
-    print(f"   Is the signature valid? -> {is_valid}")
+    print(f"   Encrypted C1 (X-coord): {C1.x}")
+    print(f"   Encrypted C2 (X-coord): {C2.x}")
     
-    print("5. Hacker attempts to tamper with the bid...")
-    tampered_proposal = "I bid $999,000 to build the government database."
-    is_valid_tampered = verify_signature(bidder_pub, tampered_proposal, digital_signature)
-    print(f"   Is the tampered signature valid? -> {is_valid_tampered}")
+    print("\n4. Evaluators decrypt after deadline...")
+    decrypted_bid = decrypt_bid_ecc(master_priv, C1, C2)
+    print(f"   Decrypted Bid Amount: ${decrypted_bid:,}")
+    
+    assert original_bid == decrypted_bid
+    print("\n✅ SUCCESS: Pure Direct ECC Encryption works perfectly!")
