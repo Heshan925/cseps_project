@@ -77,6 +77,11 @@ def decrypt_bid_ecc(private_key: int, C1: ec.Point, C2: ec.Point) -> int:
     # 4. Extract the integer bid from the point
     return unmap_point_to_bid(Pm)
 
+# --- DEMO PROTOTYPE KEYS ---
+# A static keypair so our web server doesn't lose the keys when it restarts
+DEMO_MASTER_PRIVATE_KEY = 115792089210356248762697446949407573529996955224135760342422259061068512040000
+DEMO_MASTER_PUBLIC_KEY = DEMO_MASTER_PRIVATE_KEY * curve.g
+
 # --- Testing Pure ECC ---
 if __name__ == "__main__":
     print("1. Generating Master Evaluator Keys...")

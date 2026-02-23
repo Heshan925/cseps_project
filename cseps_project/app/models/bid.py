@@ -6,10 +6,15 @@ class BidLedger(Base):
     __tablename__ = "bids"
 
     id = Column(Integer, primary_key=True, index=True)
-    bidder_public_key = Column(String, nullable=False)
     signature = Column(String, nullable=False) 
     
-    # Store BOTH X and Y coordinates for the pure ECC points
+    # 1. Encrypted IDENTITY (The mapped EC points for the Bidder ID)
+    id_c1_x = Column(String, nullable=False)
+    id_c1_y = Column(String, nullable=False)
+    id_c2_x = Column(String, nullable=False)
+    id_c2_y = Column(String, nullable=False)
+    
+    # 2. Encrypted AMOUNT (The mapped EC points for the Dollar Amount)
     encrypted_c1_x = Column(String, nullable=False) 
     encrypted_c1_y = Column(String, nullable=False) 
     encrypted_c2_x = Column(String, nullable=False) 
