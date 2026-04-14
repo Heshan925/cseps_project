@@ -30,6 +30,8 @@ class BidLedger(Base):
     __tablename__ = "bids"
     id = Column(Integer, primary_key=True, index=True)
     auction_id = Column(Integer, ForeignKey("auctions.id"))
+
+    bidder_hash = Column(String(64), unique=True, index=True)
     signature = Column(String, nullable=False) 
     
     id_c1_x = Column(String, nullable=False)

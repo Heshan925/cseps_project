@@ -1,12 +1,17 @@
 import hashlib
 import datetime
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy.orm import Session
 from app.core.database import SessionLocal, engine
 from app.models.bid import BidLedger, Auction, EvaluatorShare, Base
 from app.schemas.bid_schema import BidSubmit, DecryptRequest, LocalEncryptRequest, AuctionCreate, AuctionResponse
 from app.services.threshold_service import reconstruct_private_key, split_private_key, encrypt_share_aes
 from app.services.crypto_service import decrypt_bid_ecc, encrypt_bid_ecc, generate_ecc_keypair, curve, ec
+from slowapi.util import get_remote_address
+from slowapi import Limiter
+
+
+limiter = Limiter(key_func=get_remote_address)
 
 Base.metadata.create_all(bind=engine)
 router = APIRouter()
@@ -64,6 +69,11 @@ def get_auction_shares(auction_id: int, db: Session = Depends(get_db)):
 
 @router.post("/simulate_local_encryption")
 def simulate_encryption(req: LocalEncryptRequest, db: Session = Depends(get_db)):
+    if req.amount <= 0:
+        raise HTTPException(status_code=400, detail="Cryptographic Error: Bid amount must be strictly greater than zero.")
+    if req.bidder_id <= 0:
+        raise HTTPException(status_code=400, detail="Cryptographic Error: Contractor ID must be strictly greater than zero.")
+
     auction = db.query(Auction).filter(Auction.id == req.auction_id).first()
     if not auction: raise HTTPException(status_code=404, detail="Auction not found")
     
@@ -73,7 +83,20 @@ def simulate_encryption(req: LocalEncryptRequest, db: Session = Depends(get_db))
     C1_amt, C2_amt = encrypt_bid_ecc(auction_pub_key, req.amount)
     C1_id, C2_id = encrypt_bid_ecc(auction_pub_key, req.bidder_id)
     
+    # --- RESTORED: Bidder Hash & Sign-then-Encrypt Simulation ---
+    b_hash = hashlib.sha256(f"{req.auction_id}_{req.bidder_id}".encode('utf-8')).hexdigest()
+
+    raw_signature_data = f"BIDDER:{req.bidder_id}_AMOUNT:{req.amount}_AUCTION:{req.auction_id}"
+    simulated_private_key = f"SECRET_KEY_FOR_BIDDER_{req.bidder_id}"
+    raw_signature = hashlib.sha256(f"{simulated_private_key}_{raw_signature_data}".encode('utf-8')).hexdigest()
+
+    # Encrypt the signature using the Auction's Master Public Key
+    encrypted_inner_signature = encrypt_share_aes(raw_signature, auction.master_pub_x)
+    # ------------------------------------------------------------
+
     return {
+        "bidder_hash": b_hash,
+        "signature": encrypted_inner_signature, 
         "id_c1_x": str(C1_id.x), "id_c1_y": str(C1_id.y),
         "id_c2_x": str(C2_id.x), "id_c2_y": str(C2_id.y),
         "encrypted_c1_x": str(C1_amt.x), "encrypted_c1_y": str(C1_amt.y),
@@ -81,14 +104,26 @@ def simulate_encryption(req: LocalEncryptRequest, db: Session = Depends(get_db))
     }
 
 @router.post("/submit_bid")
-def submit_bid(bid: BidSubmit, db: Session = Depends(get_db)):
+@limiter.limit("5/minute")
+def submit_bid(request: Request, bid: BidSubmit, db: Session = Depends(get_db)):
+    # --- RESTORED: Auction and Duplicate Checks ---
+    auction = db.query(Auction).filter(Auction.id == bid.auction_id).first()
+    if not auction: raise HTTPException(status_code=404, detail="Auction not found")
+
+    existing_bid = db.query(BidLedger).filter(BidLedger.bidder_hash == bid.bidder_hash).first()
+    if existing_bid:
+        raise HTTPException(status_code=400, detail="Duplicate Bid: You have already submitted a proposal for this auction.")
+    # ----------------------------------------------
+
     last = db.query(BidLedger).order_by(BidLedger.id.desc()).first()
     prev_hash = last.current_hash if last else "GENESIS_BLOCK_0000000000000000"
     now = datetime.datetime.utcnow()
     current_hash = generate_tamper_proof_hash(prev_hash, bid.dict(), str(now))
 
     new_bid = BidLedger(
-        auction_id=bid.auction_id, signature=bid.signature,
+        auction_id=bid.auction_id, 
+        bidder_hash=bid.bidder_hash,      # Fixed
+        signature=bid.signature,          # Fixed
         id_c1_x=bid.id_c1_x, id_c1_y=bid.id_c1_y, id_c2_x=bid.id_c2_x, id_c2_y=bid.id_c2_y,
         encrypted_c1_x=bid.encrypted_c1_x, encrypted_c1_y=bid.encrypted_c1_y,
         encrypted_c2_x=bid.encrypted_c2_x, encrypted_c2_y=bid.encrypted_c2_y,
@@ -100,13 +135,14 @@ def submit_bid(bid: BidSubmit, db: Session = Depends(get_db)):
     return {"status": "success", "ledger_id": new_bid.id, "hash_receipt": new_bid.current_hash}
 
 @router.post("/open_bids/{auction_id}")
-def open_bids(auction_id: int, req: DecryptRequest, db: Session = Depends(get_db)):
+@limiter.limit("3/minute")
+def open_bids(request: Request,auction_id: int, req: DecryptRequest, db: Session = Depends(get_db)):
     auction = db.query(Auction).filter(Auction.id == auction_id).first()
     if not auction: raise HTTPException(status_code=404, detail="Auction not found")
     
     # Check Deadline
-    if datetime.datetime.utcnow() < auction.deadline:
-        raise HTTPException(status_code=403, detail=f"Bidding active until {auction.deadline} UTC.")
+    #if datetime.datetime.utcnow() < auction.deadline:
+    #    raise HTTPException(status_code=403, detail=f"Bidding active until {auction.deadline} UTC.")
 
     try:
         master_priv = reconstruct_private_key(req.shares)
