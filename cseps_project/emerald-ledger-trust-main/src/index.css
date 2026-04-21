@@ -1,0 +1,150 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* CSePS — Cryptographic Sealed E-Procurement design system.
+   All colors MUST be HSL. */
+
+@layer base {
+  :root {
+    /* Deep navy cryptographic theme */
+    --background: 222 47% 5%;
+    --foreground: 210 40% 98%;
+
+    --card: 222 45% 8%;
+    --card-foreground: 210 40% 98%;
+
+    --popover: 222 45% 8%;
+    --popover-foreground: 210 40% 98%;
+
+    --primary: 217 91% 60%;            /* electric blue */
+    --primary-foreground: 222 47% 5%;
+    --primary-glow: 199 89% 65%;
+
+    --secondary: 217 33% 14%;
+    --secondary-foreground: 210 40% 98%;
+
+    --muted: 217 33% 12%;
+    --muted-foreground: 215 20% 65%;
+
+    --accent: 158 64% 52%;             /* emerald */
+    --accent-foreground: 222 47% 5%;
+
+    --gold: 38 92% 50%;
+    --gold-foreground: 222 47% 5%;
+
+    --destructive: 0 72% 51%;
+    --destructive-foreground: 210 40% 98%;
+
+    --border: 217 33% 17%;
+    --input: 217 33% 14%;
+    --ring: 217 91% 60%;
+
+    --radius: 0.625rem;
+
+    /* Surfaces */
+    --surface-1: 222 47% 7%;
+    --surface-2: 220 40% 10%;
+    --surface-3: 218 38% 13%;
+    --border-subtle: 217 33% 18%;
+
+    /* Gradients */
+    --gradient-primary: linear-gradient(135deg, hsl(217 91% 60%), hsl(199 89% 65%));
+    --gradient-emerald: linear-gradient(135deg, hsl(158 64% 52%), hsl(173 80% 45%));
+    --gradient-gold: linear-gradient(135deg, hsl(38 92% 50%), hsl(28 92% 55%));
+    --gradient-surface: linear-gradient(180deg, hsl(222 47% 8%), hsl(222 47% 6%));
+    --gradient-glow: radial-gradient(60% 50% at 50% 0%, hsl(217 91% 60% / 0.18), transparent 70%);
+
+    /* Shadows */
+    --shadow-elegant: 0 10px 40px -10px hsl(217 91% 60% / 0.35);
+    --shadow-card: 0 1px 0 hsl(0 0% 100% / 0.04) inset, 0 8px 24px -12px hsl(222 47% 2% / 0.6);
+    --shadow-glow: 0 0 0 1px hsl(217 91% 60% / 0.3), 0 0 32px hsl(217 91% 60% / 0.25);
+
+    --transition-base: all 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+
+    /* Sidebar */
+    --sidebar-background: 222 47% 6%;
+    --sidebar-foreground: 215 20% 75%;
+    --sidebar-primary: 217 91% 60%;
+    --sidebar-primary-foreground: 222 47% 5%;
+    --sidebar-accent: 217 33% 14%;
+    --sidebar-accent-foreground: 210 40% 98%;
+    --sidebar-border: 217 33% 17%;
+    --sidebar-ring: 217 91% 60%;
+  }
+
+  .dark {
+    /* Same — app is dark by default */
+    --background: 222 47% 5%;
+    --foreground: 210 40% 98%;
+  }
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+  html, body, #root {
+    @apply h-full;
+  }
+  body {
+    @apply bg-background text-foreground antialiased;
+    font-family: 'DM Sans', system-ui, -apple-system, sans-serif;
+    background-image:
+      radial-gradient(80% 60% at 50% -10%, hsl(217 91% 60% / 0.10), transparent 60%),
+      radial-gradient(50% 40% at 90% 10%, hsl(158 64% 52% / 0.06), transparent 60%);
+    background-attachment: fixed;
+  }
+  .font-mono { font-family: 'DM Mono', ui-monospace, SFMono-Regular, monospace; }
+}
+
+@layer components {
+  .glass-card {
+    background: var(--gradient-surface);
+    border: 1px solid hsl(var(--border-subtle));
+    box-shadow: var(--shadow-card);
+    backdrop-filter: blur(8px);
+  }
+  .glow-ring {
+    box-shadow: var(--shadow-glow);
+  }
+  .text-gradient-primary {
+    background: var(--gradient-primary);
+    -webkit-background-clip: text;
+    background-clip: text;
+    color: transparent;
+  }
+  .text-gradient-emerald {
+    background: var(--gradient-emerald);
+    -webkit-background-clip: text;
+    background-clip: text;
+    color: transparent;
+  }
+  .grid-bg {
+    background-image:
+      linear-gradient(hsl(var(--border-subtle)) 1px, transparent 1px),
+      linear-gradient(90deg, hsl(var(--border-subtle)) 1px, transparent 1px);
+    background-size: 32px 32px;
+    background-position: -1px -1px;
+    mask-image: radial-gradient(ellipse 60% 50% at 50% 0%, black, transparent 70%);
+  }
+}
+
+@layer utilities {
+  .animate-fade-in { animation: fadeIn 0.4s ease-out both; }
+  .animate-slide-up { animation: slideUp 0.4s cubic-bezier(0.4,0,0.2,1) both; }
+  .animate-pulse-glow { animation: pulseGlow 2.4s ease-in-out infinite; }
+}
+
+@keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
+@keyframes slideUp { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
+@keyframes pulseGlow {
+  0%, 100% { box-shadow: 0 0 0 0 hsl(var(--primary) / 0.4); }
+  50% { box-shadow: 0 0 0 8px hsl(var(--primary) / 0); }
+}
+
+/* Scrollbar */
+::-webkit-scrollbar { width: 10px; height: 10px; }
+::-webkit-scrollbar-track { background: hsl(var(--background)); }
+::-webkit-scrollbar-thumb { background: hsl(var(--border)); border-radius: 8px; }
+::-webkit-scrollbar-thumb:hover { background: hsl(var(--muted-foreground) / 0.5); }

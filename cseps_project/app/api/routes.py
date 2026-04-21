@@ -1,172 +1,96 @@
 import hashlib
 import datetime
+import requests  # NEW: To communicate with the TTP Vault
+
 from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy.orm import Session
 from app.core.database import SessionLocal, engine
 from app.models.bid import BidLedger, Auction, EvaluatorShare, Base
 from app.schemas.bid_schema import BidSubmit, DecryptRequest, LocalEncryptRequest, AuctionCreate, AuctionResponse
-from app.services.threshold_service import reconstruct_private_key, split_private_key, encrypt_share_aes
-from app.services.crypto_service import decrypt_bid_ecc, encrypt_bid_ecc, generate_ecc_keypair, curve, ec
+
 from slowapi.util import get_remote_address
 from slowapi import Limiter
 
-
 limiter = Limiter(key_func=get_remote_address)
-
 Base.metadata.create_all(bind=engine)
 router = APIRouter()
 
 def get_db():
     db = SessionLocal()
-    try: yield db
-    finally: db.close()
+    try: 
+        yield db
+    finally: 
+        db.close()
 
-def generate_tamper_proof_hash(prev: str, payload: dict, ts: str) -> str:
-    return hashlib.sha256(f"{prev}{payload}{ts}".encode('utf-8')).hexdigest()
+# The URL for your new secure vault!
+TTP_VAULT_URL = "http://127.0.0.1:8001"
 
-# --- NEW: AUCTION MANAGEMENT ENDPOINTS ---
 
 @router.post("/create_auction")
 def create_auction(req: AuctionCreate, db: Session = Depends(get_db)):
     if len(req.evaluators) != 5:
         raise HTTPException(status_code=400, detail="Exactly 5 evaluators are required.")
 
-    # 1. Generate a brand new Master Keypair for this specific auction
-    master_priv, master_pub = generate_ecc_keypair()
+    # 1. Ask the Vault to generate everything
+    passwords = [e.password for e in req.evaluators]
+    try:
+        response = requests.post(f"{TTP_VAULT_URL}/generate_keys", json={"passwords": passwords})
+        response.raise_for_status()
+        vault_data = response.json()
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"TTP Vault offline or failed: {str(e)}")
 
-    # 2. Save the Auction with the new Public Key
+    # 2. Save the safe data to the Database
     new_auction = Auction(
         title=req.title, description=req.description, deadline=req.deadline,
-        master_pub_x=str(master_pub.x), master_pub_y=str(master_pub.y)
+        master_pub_x=vault_data["master_pub_x"], master_pub_y=vault_data["master_pub_y"]
     )
     db.add(new_auction)
     db.commit()
     db.refresh(new_auction)
-
-    # 3. Split the private key and encrypt shares for each evaluator
-    raw_shares = split_private_key(master_priv, threshold=3, total_shares=5)
     
     for i, eval_data in enumerate(req.evaluators):
-        encrypted_str = encrypt_share_aes(raw_shares[i], eval_data.password)
         new_share = EvaluatorShare(
-            auction_id=new_auction.id, evaluator_name=eval_data.name, encrypted_share=encrypted_str
+            auction_id=new_auction.id, 
+            evaluator_name=eval_data.name, 
+            encrypted_share=vault_data["encrypted_shares"][i]
         )
         db.add(new_share)
         
     db.commit()
     return {"status": "success", "auction_id": new_auction.id}
 
-@router.get("/auctions", response_model=list[AuctionResponse])
-def get_auctions(db: Session = Depends(get_db)):
-    return db.query(Auction).all()
-
-@router.get("/auctions/{auction_id}/shares")
-def get_auction_shares(auction_id: int, db: Session = Depends(get_db)):
-    shares = db.query(EvaluatorShare).filter(EvaluatorShare.auction_id == auction_id).all()
-    return [{"name": s.evaluator_name, "encrypted_share": s.encrypted_share} for s in shares]
-
-# --- UPDATED: BIDDING ENDPOINTS ---
-
-@router.post("/simulate_local_encryption")
-def simulate_encryption(req: LocalEncryptRequest, db: Session = Depends(get_db)):
-    if req.amount <= 0:
-        raise HTTPException(status_code=400, detail="Cryptographic Error: Bid amount must be strictly greater than zero.")
-    if req.bidder_id <= 0:
-        raise HTTPException(status_code=400, detail="Cryptographic Error: Contractor ID must be strictly greater than zero.")
-
-    auction = db.query(Auction).filter(Auction.id == req.auction_id).first()
-    if not auction: raise HTTPException(status_code=404, detail="Auction not found")
-    
-    # Reconstruct the specific auction's public key
-    auction_pub_key = ec.Point(curve, int(auction.master_pub_x), int(auction.master_pub_y))
-    
-    C1_amt, C2_amt = encrypt_bid_ecc(auction_pub_key, req.amount)
-    C1_id, C2_id = encrypt_bid_ecc(auction_pub_key, req.bidder_id)
-    
-    # --- RESTORED: Bidder Hash & Sign-then-Encrypt Simulation ---
-    b_hash = hashlib.sha256(f"{req.auction_id}_{req.bidder_id}".encode('utf-8')).hexdigest()
-
-    raw_signature_data = f"BIDDER:{req.bidder_id}_AMOUNT:{req.amount}_AUCTION:{req.auction_id}"
-    simulated_private_key = f"SECRET_KEY_FOR_BIDDER_{req.bidder_id}"
-    raw_signature = hashlib.sha256(f"{simulated_private_key}_{raw_signature_data}".encode('utf-8')).hexdigest()
-
-    # Encrypt the signature using the Auction's Master Public Key
-    encrypted_inner_signature = encrypt_share_aes(raw_signature, auction.master_pub_x)
-    # ------------------------------------------------------------
-
-    return {
-        "bidder_hash": b_hash,
-        "signature": encrypted_inner_signature, 
-        "id_c1_x": str(C1_id.x), "id_c1_y": str(C1_id.y),
-        "id_c2_x": str(C2_id.x), "id_c2_y": str(C2_id.y),
-        "encrypted_c1_x": str(C1_amt.x), "encrypted_c1_y": str(C1_amt.y),
-        "encrypted_c2_x": str(C2_amt.x), "encrypted_c2_y": str(C2_amt.y)
-    }
-
-@router.post("/submit_bid")
-@limiter.limit("5/minute")
-def submit_bid(request: Request, bid: BidSubmit, db: Session = Depends(get_db)):
-    # --- RESTORED: Auction and Duplicate Checks ---
-    auction = db.query(Auction).filter(Auction.id == bid.auction_id).first()
-    if not auction: raise HTTPException(status_code=404, detail="Auction not found")
-
-    existing_bid = db.query(BidLedger).filter(BidLedger.bidder_hash == bid.bidder_hash).first()
-    if existing_bid:
-        raise HTTPException(status_code=400, detail="Duplicate Bid: You have already submitted a proposal for this auction.")
-    # ----------------------------------------------
-
-    last = db.query(BidLedger).order_by(BidLedger.id.desc()).first()
-    prev_hash = last.current_hash if last else "GENESIS_BLOCK_0000000000000000"
-    now = datetime.datetime.utcnow()
-    current_hash = generate_tamper_proof_hash(prev_hash, bid.dict(), str(now))
-
-    new_bid = BidLedger(
-        auction_id=bid.auction_id, 
-        bidder_hash=bid.bidder_hash,      # Fixed
-        signature=bid.signature,          # Fixed
-        id_c1_x=bid.id_c1_x, id_c1_y=bid.id_c1_y, id_c2_x=bid.id_c2_x, id_c2_y=bid.id_c2_y,
-        encrypted_c1_x=bid.encrypted_c1_x, encrypted_c1_y=bid.encrypted_c1_y,
-        encrypted_c2_x=bid.encrypted_c2_x, encrypted_c2_y=bid.encrypted_c2_y,
-        timestamp=now, previous_hash=prev_hash, current_hash=current_hash
-    )
-    db.add(new_bid)
-    db.commit()
-    db.refresh(new_bid)
-    return {"status": "success", "ledger_id": new_bid.id, "hash_receipt": new_bid.current_hash}
-
 @router.post("/open_bids/{auction_id}")
-@limiter.limit("3/minute")
-def open_bids(request: Request,auction_id: int, req: DecryptRequest, db: Session = Depends(get_db)):
+def open_bids(request: Request, auction_id: int, req: DecryptRequest, db: Session = Depends(get_db)):
     auction = db.query(Auction).filter(Auction.id == auction_id).first()
     if not auction: raise HTTPException(status_code=404, detail="Auction not found")
-    
-    # Check Deadline
-    #if datetime.datetime.utcnow() < auction.deadline:
-    #    raise HTTPException(status_code=403, detail=f"Bidding active until {auction.deadline} UTC.")
 
-    try:
-        master_priv = reconstruct_private_key(req.shares)
-    except Exception:
-        raise HTTPException(status_code=400, detail="Invalid shares.")
-
-    # Only fetch bids for THIS specific auction
+    # Gather the raw ciphertext bids from the database
     auction_bids = db.query(BidLedger).filter(BidLedger.auction_id == auction_id).all()
-    results = []
-
+    bids_payload = []
     for bid in auction_bids:
-        try:
-            C1_amt = ec.Point(curve, int(bid.encrypted_c1_x), int(bid.encrypted_c1_y))
-            C2_amt = ec.Point(curve, int(bid.encrypted_c2_x), int(bid.encrypted_c2_y))
-            amt = decrypt_bid_ecc(master_priv, C1_amt, C2_amt)
-            
-            C1_id = ec.Point(curve, int(bid.id_c1_x), int(bid.id_c1_y))
-            C2_id = ec.Point(curve, int(bid.id_c2_x), int(bid.id_c2_y))
-            bidder_id = decrypt_bid_ecc(master_priv, C1_id, C2_id)
-            
-            results.append({"ledger_id": bid.id, "decrypted_id": f"Contractor-{bidder_id}", "raw_amount": amt})
-        except Exception:
-            results.append({"ledger_id": bid.id, "error": "Decryption failed.", "raw_amount": float('inf')})
+        bids_payload.append({
+            "ledger_id": bid.id,
+            "encrypted_c1_x": bid.encrypted_c1_x, "encrypted_c1_y": bid.encrypted_c1_y, 
+            "encrypted_c2_x": bid.encrypted_c2_x, "encrypted_c2_y": bid.encrypted_c2_y,
+            "id_c1_x": bid.id_c1_x, "id_c1_y": bid.id_c1_y,
+            "id_c2_x": bid.id_c2_x, "id_c2_y": bid.id_c2_y,
+        })
 
+    # Ask the Vault to unlock and decrypt!
+    try:
+        response = requests.post(f"{TTP_VAULT_URL}/unlock_and_decrypt", json={
+            "encrypted_shares": req.shares,
+            "passwords": req.passwords,
+            "encrypted_bids": bids_payload
+        })
+        response.raise_for_status()
+        vault_response = response.json()
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+    # Format the results
+    results = vault_response["decrypted_bids"]
     results.sort(key=lambda x: x["raw_amount"])
     for res in results:
         if res["raw_amount"] != float('inf'):
@@ -174,3 +98,76 @@ def open_bids(request: Request,auction_id: int, req: DecryptRequest, db: Session
         del res["raw_amount"]
 
     return {"status": "success", "bids_opened": len(results), "results": results}
+
+@router.get("/auctions", response_model=list[AuctionResponse])
+def get_auctions(db: Session = Depends(get_db)):
+    # Returns the list of auctions to the React frontend
+    return db.query(Auction).all()
+
+@router.get("/auctions/{auction_id}/shares")
+def get_auction_shares(auction_id: int, db: Session = Depends(get_db)):
+    # Returns the AES-encrypted shares to the frontend for the evaluators
+    shares = db.query(EvaluatorShare).filter(EvaluatorShare.auction_id == auction_id).all()
+    return [{"name": s.evaluator_name, "encrypted_share": s.encrypted_share} for s in shares]
+
+
+@router.post("/simulate_local_encryption")
+def simulate_encryption(req: LocalEncryptRequest, db: Session = Depends(get_db)):
+    # 1. Verify the auction exists
+    auction = db.query(Auction).filter(Auction.id == req.auction_id).first()
+    if not auction: raise HTTPException(status_code=404, detail="Auction not found")
+    
+    # 2. Ask the TTP Vault to do the heavy ECC math
+    try:
+        response = requests.post(f"{TTP_VAULT_URL}/simulate_encryption", json={
+            "auction_pub_x": auction.master_pub_x,
+            "auction_pub_y": auction.master_pub_y,
+            "amount": req.amount,
+            "bidder_id": req.bidder_id,
+            "auction_id": req.auction_id
+        })
+        response.raise_for_status()
+        vault_data = response.json()
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"TTP Vault Encryption Failed: {str(e)}")
+
+    # 3. Return the encrypted coordinates to React
+    return vault_data
+
+@router.post("/submit_bid")
+@limiter.limit("5/minute")
+def submit_bid(req: BidSubmit, request: Request, db: Session = Depends(get_db)):
+    # 1. Verify auction exists
+    auction = db.query(Auction).filter(Auction.id == req.auction_id).first()
+    if not auction:
+        raise HTTPException(status_code=404, detail="Auction not found")
+    
+    # 2. Tamper-Proof Blockchain Logic (Get previous hash)
+    last_bid = db.query(BidLedger).order_by(BidLedger.id.desc()).first()
+    prev_hash = last_bid.current_hash if last_bid else "GENESIS_BLOCK"
+
+    # --- THE FIX: Generate the timestamp HERE on the server ---
+    current_time = datetime.datetime.utcnow()
+
+    # 3. Create the current block hash (using the current_time)
+    block_data = f"{prev_hash}_{req.bidder_hash}_{req.encrypted_c1_x}_{current_time.timestamp()}"
+    current_hash = hashlib.sha256(block_data.encode('utf-8')).hexdigest()
+
+    # 4. Save the encrypted bid to the Ledger (Zero-Knowledge!)
+    new_bid = BidLedger(
+        auction_id=req.auction_id,
+        bidder_hash=req.bidder_hash,
+        encrypted_c1_x=req.encrypted_c1_x, encrypted_c1_y=req.encrypted_c1_y,
+        encrypted_c2_x=req.encrypted_c2_x, encrypted_c2_y=req.encrypted_c2_y,
+        id_c1_x=req.id_c1_x, id_c1_y=req.id_c1_y,
+        id_c2_x=req.id_c2_x, id_c2_y=req.id_c2_y,
+        signature=req.signature,
+        previous_hash=prev_hash,
+        current_hash=current_hash,
+        timestamp=current_time # Use the exact same time we just hashed!
+    )
+    
+    db.add(new_bid)
+    db.commit()
+    
+    return {"status": "success", "message": "Bid securely added to the ledger."}

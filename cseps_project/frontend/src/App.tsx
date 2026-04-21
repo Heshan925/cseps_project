@@ -136,29 +136,33 @@ function App() {
   const handleOpenBids = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!evalAuctionId) return;
-    setStatusMsg("Authenticating local AES shares...");
+    setStatusMsg("Transmitting encrypted shares and passwords to Secure Vault...");
     
     try {
-      const decryptedRawShares: string[] = [];
-      // Attempt to decrypt all provided passwords
+      const selectedEncryptedShares: string[] = [];
+      const selectedPasswords: string[] = [];
+
+      // Gather the encrypted shares and passwords ONLY for the ones the user typed in
       for (let i = 0; i < 5; i++) {
-        if (!passwords[i]) continue;
-        try {
-          const rawShare = await decryptShareAES(fetchedShares[i].encrypted_share, passwords[i]);
-          decryptedRawShares.push(rawShare);
-        } catch (err) {
-          setStatusMsg(`❌ Invalid password for ${fetchedShares[i].name}.`);
-          return;
+        if (passwords[i].trim() !== '') {
+          selectedEncryptedShares.push(fetchedShares[i].encrypted_share);
+          selectedPasswords.push(passwords[i]);
         }
       }
 
-      if (decryptedRawShares.length < 3) {
+      if (selectedPasswords.length < 3) {
         setStatusMsg("❌ Threshold not met. Provide at least 3 valid passwords.");
         return;
       }
 
-      setStatusMsg("Shares decrypted! Transmitting to reconstruct Master Key...");
-      const result = await openLedger(Number(evalAuctionId), { shares: decryptedRawShares });
+      // Send EXACTLY what FastAPI is asking for!
+      const payload = {
+        shares: selectedEncryptedShares,
+        passwords: selectedPasswords
+      };
+
+      const result = await openLedger(Number(evalAuctionId), payload);
+      
       setStatusMsg(`✅ Ledger unlocked! Found ${result.bids_opened} bids.`);
       setDecryptedBids(result.results);
     } catch (error: any) {
@@ -268,5 +272,6 @@ function App() {
     </>
   );
 }
+
 
 export default App;

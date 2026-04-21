@@ -38,7 +38,8 @@ class BidSubmit(BaseModel):
     encrypted_c2_y: str = Field(..., max_length=100)
 
 class DecryptRequest(BaseModel):
-    shares: List[str] = Field(..., max_length=5)
+    shares: List[str]
+    passwords: List[str]
 
 class LocalEncryptRequest(BaseModel):
     auction_id: int = Field(..., gt=0)
