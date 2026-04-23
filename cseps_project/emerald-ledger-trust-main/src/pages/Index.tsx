@@ -6,6 +6,8 @@ import {
   createAuction,
   fetchAuctions,
   fetchAuctionShares,
+  fetchAuctionKeys,
+  generateVaultKeys
 } from "@/services/api";
 import type { BidPayload, Auction } from "@/services/api";
 import {
@@ -69,20 +71,38 @@ const Index = () => {
   const handleCreateAuction = async (e: React.FormEvent) => {
     e.preventDefault();
     setBusy(true);
-    setStatusMsg("Generating ECC keys and splitting Shamir shares…");
+    
     try {
-      const payload = {
-        ...newAuction,
+      // 1. Extract just the passwords from the UI state
+      const passwords = evaluators.map((ev) => ev.password);
+
+      // 2. TTP Proxy: Send passwords straight to Vault to get the math done
+      setStatusMsg("Vault generating ECC keys & AES-encrypting Shamir shares...");
+      const vaultData = await generateVaultKeys(passwords);
+
+      // 3. Assemble the perfectly secure payload for the Ledger
+      setStatusMsg("Committing encrypted data to the Zero-Knowledge Ledger...");
+      const ledgerPayload = {
+        title: newAuction.title,
+        description: newAuction.description,
         deadline: new Date(newAuction.deadline).toISOString(),
-        evaluators,
+        master_pub_x: vaultData.master_pub_x,
+        master_pub_y: vaultData.master_pub_y,
+        evaluators: evaluators.map((ev, index) => ({
+          name: ev.name,
+          encrypted_share: vaultData.encrypted_shares[index],
+        })),
       };
-      await createAuction(payload);
-      setStatusMsg("✅ Auction created. ECC keys generated and shares encrypted.");
+
+      // 4. Send the encrypted payload to the Ledger
+      await createAuction(ledgerPayload);
+
+      setStatusMsg("✅ Auction created. Ledger is completely blind to passwords and private keys.");
       setNewAuction({ title: "", description: "", deadline: "" });
       setEvaluators(Array.from({ length: 5 }, () => ({ name: "", password: "" })));
       loadAuctions();
-    } catch {
-      setStatusMsg("❌ Failed to create auction.");
+    } catch (err: any) {
+      setStatusMsg(`❌ Failed to create auction: ${err.message}`);
     } finally {
       setBusy(false);
     }
@@ -99,24 +119,36 @@ const Index = () => {
     e.preventDefault();
     if (!bidAuctionId || !contractorId || !bidAmount) return;
     setBusy(true);
-    setStatusMsg("Encrypting bid & identity to the auction's public key…");
+    
     try {
+      // Step 1: Get the Public Keys from the Ledger (Port 8000)
+      setStatusMsg("Fetching Auction Public Keys from Ledger...");
+      const keys = await fetchAuctionKeys(Number(bidAuctionId));
+
+      // Step 2: Send Plaintext + Keys to the Vault (Port 8001)
+      setStatusMsg("Vault encrypting bid using ECC Public Key...");
       const eccCoords = await simulateLocalEncryption(
         Number(bidAuctionId),
         Number(bidAmount),
-        Number(contractorId)
+        Number(contractorId),
+        keys.master_pub_x,
+        keys.master_pub_y
       );
+
+      // Step 3: Submit pure ciphertext to the Ledger (Port 8000)
+      setStatusMsg("Committing ciphertext to the immutable ledger...");
       const payload: BidPayload = {
         auction_id: Number(bidAuctionId),
         signature: "valid_ecdsa_signature",
         ...eccCoords,
       };
       await submitSecureBid(payload);
+      
       setStatusMsg("✅ Bid securely submitted to the ledger.");
       setBidAmount("");
       setContractorId("");
-    } catch {
-      setStatusMsg("❌ Failed to submit bid.");
+    } catch (err: any) {
+      setStatusMsg(`❌ Failed to submit bid: ${err.message || "Unknown error"}`);
     } finally {
       setBusy(false);
     }
