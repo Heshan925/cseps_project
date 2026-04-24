@@ -77,11 +77,11 @@ const Index = () => {
       const passwords = evaluators.map((ev) => ev.password);
 
       // 2. TTP Proxy: Send passwords straight to Vault to get the math done
-      setStatusMsg("Vault generating ECC keys & AES-encrypting Shamir shares...");
+      setStatusMsg("Vault generating keys & encrypting ...");
       const vaultData = await generateVaultKeys(passwords);
 
       // 3. Assemble the perfectly secure payload for the Ledger
-      setStatusMsg("Committing encrypted data to the Zero-Knowledge Ledger...");
+      setStatusMsg("Committing encrypted data to the Ledger...");
       const ledgerPayload = {
         title: newAuction.title,
         description: newAuction.description,
@@ -210,8 +210,12 @@ const Index = () => {
       <header className="sticky top-0 z-30 border-b border-border/60 bg-background/70 backdrop-blur-xl">
         <div className="mx-auto flex h-16 max-w-7xl items-center justify-between px-6">
           <div className="flex items-center gap-3">
-            <div className="grid h-9 w-9 place-items-center rounded-lg bg-[image:var(--gradient-primary)] text-primary-foreground shadow-[var(--shadow-elegant)]">
-              <Shield className="h-5 w-5" />
+            <div className="grid h-9 w-9 place-items-center rounded-lg bg-white text-primary-foreground shadow-[var(--shadow-elegant)] overflow-hidden">
+              <img 
+                src="/logo.png" 
+                alt="CSePS Logo" 
+                className="h-full w-full object-cover" 
+              />
             </div>
             <div>
               <h1 className="text-sm font-semibold tracking-tight">
@@ -231,9 +235,7 @@ const Index = () => {
               </span>
               Ledger online
             </span>
-            <span className="inline-flex items-center gap-1.5 rounded-full border border-border bg-secondary/60 px-3 py-1 text-xs text-muted-foreground font-mono">
-              ECC · Shamir(3/5) · AES-GCM
-            </span>
+            
           </div>
         </div>
       </header>
@@ -281,13 +283,14 @@ const Index = () => {
           </nav>
 
           <div className="glass-card mt-4 rounded-xl p-4">
-            <div className="mb-2 flex items-center gap-2 text-xs font-medium text-muted-foreground">
+            <div className="mb-3 flex items-center gap-2 text-xs font-medium text-muted-foreground">
               <Lock className="h-3.5 w-3.5" /> Security guarantees
             </div>
-            <ul className="space-y-1.5 text-xs text-muted-foreground">
-              <li className="flex gap-2"><span className="text-accent">●</span> End-to-end ECC encryption</li>
-              <li className="flex gap-2"><span className="text-primary">●</span> Shamir 3-of-5 threshold</li>
-              <li className="flex gap-2"><span className="text-gold">●</span> Tamper-evident ledger</li>
+            {/* Changed space-y-1.5 to space-y-3 for more vertical gap */}
+            <ul className="space-y-3 text-xs text-muted-foreground">
+              <li className="flex gap-2"><span className="text-accent">●</span> Locked instantly upon submission</li>
+              <li className="flex gap-2"><span className="text-primary">●</span> Requires team consensus to open</li>
+              <li className="flex gap-2"><span className="text-gold">●</span> Impossible to secretly alter</li>
             </ul>
           </div>
         </aside>
@@ -322,7 +325,7 @@ const Index = () => {
               <SectionHeader
                 eyebrow="Admin"
                 title="Create a new cryptographic auction"
-                description="Initialize an auction. The system generates an ECC keypair and splits the master key into 5 Shamir shares — any 3 can later unseal the bids."
+                description="Initialize an auction."
                 icon={<Settings2 className="h-5 w-5" />}
               />
 
@@ -394,7 +397,7 @@ const Index = () => {
                 </div>
 
                 <SubmitButton busy={busy} variant="primary" icon={<KeyRound className="h-4 w-4" />}>
-                  Initialize auction & generate keys
+                  Initialize auction 
                 </SubmitButton>
               </form>
             </section>
@@ -406,7 +409,7 @@ const Index = () => {
               <SectionHeader
                 eyebrow="Bidder"
                 title="Submit a sealed bid"
-                description="Your bid amount and contractor identity are encrypted locally to the auction's public key before being committed to the ledger."
+                description="Your bid amount and contractor identity are encrypted before being committed to the ledger."
                 icon={<Gavel className="h-5 w-5" />}
               />
 
@@ -452,21 +455,21 @@ const Index = () => {
                   </div>
 
                   <SubmitButton busy={busy} variant="emerald" icon={<FileLock2 className="h-4 w-4" />}>
-                    Encrypt & submit to ledger
+                    Submit bid
                   </SubmitButton>
                 </form>
 
                 <aside className="glass-card rounded-2xl p-6">
                   <h3 className="text-sm font-semibold">How sealing works</h3>
                   <ol className="mt-4 space-y-4 text-xs text-muted-foreground">
-                    <Step n={1} title="Local ECC encryption">
-                      Your bid never leaves your device in plaintext.
+                    <Step n={1} title="Secure Sealing">
+                      Your bid is locked inside a secure digital vault immediately.
                     </Step>
-                    <Step n={2} title="Signed commitment">
-                      A signed ciphertext is committed to the append-only ledger.
+                    <Step n={2} title="Blind Storage">
+                      Stored data are unreadable without the proper validations.
                     </Step>
-                    <Step n={3} title="Threshold reveal">
-                      Only after deadline can 3-of-5 evaluators jointly decrypt.
+                    <Step n={3} title="Team Unlocking">
+                      Bids stay locked until the deadline. To open them, at least 3 out of the 5 judges must enter their passwords together.
                     </Step>
                   </ol>
                 </aside>
@@ -480,7 +483,7 @@ const Index = () => {
               <SectionHeader
                 eyebrow="Evaluator"
                 title="Unlock the sealed ledger"
-                description="Provide passphrases for at least 3 of the 5 evaluators to reconstruct the master key and decrypt all sealed bids."
+                description="Provide passphrases for at least 3 of the 5 evaluators to decrypt all sealed bids."
                 icon={<KeyRound className="h-5 w-5" />}
               />
 
@@ -505,7 +508,7 @@ const Index = () => {
                   <>
                     <div className="my-2 flex items-center gap-2 rounded-lg border border-primary/20 bg-primary/5 px-3 py-2 text-xs text-primary">
                       <Lock className="h-3.5 w-3.5" />
-                      Enter passphrases for at least 3 evaluators to reconstruct the master key.
+                      Enter passphrases for at least 3 evaluators.
                     </div>
 
                     <div className="mt-4 grid gap-3">
@@ -559,7 +562,7 @@ const Index = () => {
                     </div>
 
                     <SubmitButton busy={busy} variant="gold" icon={<KeyRound className="h-4 w-4" />}>
-                      Reconstruct key & decrypt
+                      Reveal Bids
                     </SubmitButton>
                   </>
                 )}
