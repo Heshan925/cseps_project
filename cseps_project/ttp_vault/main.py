@@ -5,8 +5,8 @@ import hashlib
 from fastapi.middleware.cors import CORSMiddleware
 
 # Import from your local vault files
-from crypto_service import generate_ecc_keypair, decrypt_bid_ecc, encrypt_bid_ecc, curve, ec
-from threshold_service import split_private_key, encrypt_share_aes, reconstruct_private_key
+from ttp_vault.crypto_service import generate_ecc_keypair, decrypt_bid_ecc, encrypt_bid_ecc, curve, ec
+from ttp_vault.threshold_service import split_private_key, encrypt_share_aes, reconstruct_private_key
 
 app = FastAPI(title="CSePS Custom Hardware Security Module (HSM)")
 
