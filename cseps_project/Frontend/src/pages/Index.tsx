@@ -7,7 +7,8 @@ import {
   fetchAuctions,
   fetchAuctionShares,
   fetchAuctionKeys,
-  generateVaultKeys
+  generateVaultKeys,
+  getFriendlyErrorMessage // Added the error handler
 } from "@/services/api";
 import type { BidPayload, Auction } from "@/services/api";
 import {
@@ -101,8 +102,9 @@ const Index = () => {
       setNewAuction({ title: "", description: "", deadline: "" });
       setEvaluators(Array.from({ length: 5 }, () => ({ name: "", password: "" })));
       loadAuctions();
-    } catch (err: any) {
-      setStatusMsg(`❌ Failed to create auction: ${err.message}`);
+    } catch (err: unknown) {
+      // Used friendly error handler here
+      setStatusMsg(`❌ ${getFriendlyErrorMessage(err)}`);
     } finally {
       setBusy(false);
     }
@@ -147,8 +149,9 @@ const Index = () => {
       setStatusMsg("✅ Bid securely submitted to the ledger.");
       setBidAmount("");
       setContractorId("");
-    } catch (err: any) {
-      setStatusMsg(`❌ Failed to submit bid: ${err.message || "Unknown error"}`);
+    } catch (err: unknown) {
+      // Used friendly error handler here
+      setStatusMsg(`❌ ${getFriendlyErrorMessage(err)}`);
     } finally {
       setBusy(false);
     }
@@ -188,8 +191,9 @@ const Index = () => {
       const result = await openLedger(Number(evalAuctionId), payload);
       setStatusMsg(`✅ Ledger unlocked. Found ${result.bids_opened} bids.`);
       setDecryptedBids(result.results);
-    } catch {
-      setStatusMsg(`❌ Decryption failed.`);
+    } catch (err: unknown) {
+      // Used friendly error handler here
+      setStatusMsg(`❌ ${getFriendlyErrorMessage(err)}`);
     } finally {
       setBusy(false);
     }
@@ -532,9 +536,6 @@ const Index = () => {
                             </div>
                             <div className="min-w-0">
                               <div className="truncate text-sm font-medium">👤 {share.name}</div>
-                              <div className="truncate font-mono text-[10px] text-muted-foreground">
-                                share: {share.encrypted_share?.slice(0, 28)}…
-                              </div>
                             </div>
                             <input
                               type="password"

@@ -1,6 +1,7 @@
 import hashlib
-import datetime
+from datetime import datetime, timezone
 import requests 
+from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy.orm import Session
@@ -67,7 +68,7 @@ def submit_bid(req: BidSubmit, request: Request, db: Session = Depends(get_db)):
     last_bid = db.query(BidLedger).order_by(BidLedger.id.desc()).first()
     prev_hash = last_bid.current_hash if last_bid else "GENESIS_BLOCK"
 
-    current_time = datetime.datetime.utcnow()
+    current_time = datetime.now(timezone.utc)
     block_data = f"{prev_hash}_{req.bidder_hash}_{req.encrypted_c1_x}_{current_time.timestamp()}"
     current_hash = hashlib.sha256(block_data.encode('utf-8')).hexdigest()
 
@@ -95,6 +96,23 @@ def open_bids(request: Request, auction_id: int, req: DecryptRequest, db: Sessio
     auction = db.query(Auction).filter(Auction.id == auction_id).first()
     if not auction: raise HTTPException(status_code=404, detail="Auction not found")
 
+    current_time = datetime.now(timezone.utc)
+    
+    auction_deadline = auction.deadline
+    if auction_deadline.tzinfo is None:
+        auction_deadline = auction_deadline.replace(tzinfo=timezone.utc)
+        
+    if current_time < auction_deadline:
+        # Convert the raw UTC database time back to local time for the UI message
+        local_deadline = auction_deadline.astimezone(ZoneInfo("Asia/Colombo"))
+        
+        # Format it nicely (e.g., "2026-06-30 at 10:00 AM")
+        friendly_time = local_deadline.strftime("%Y-%m-%d at %I:%M %p")
+        raise HTTPException(
+            status_code=403, 
+            detail=f"Auction is still active. Bids cannot be revealed until {friendly_time}"
+        )
+     
     # Gather the raw ciphertext bids from the database
     auction_bids = db.query(BidLedger).filter(BidLedger.auction_id == auction_id).all()
     bids_payload = [

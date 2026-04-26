@@ -2,6 +2,63 @@
 const API_BASE = (import.meta.env.VITE_API_BASE as string) || "http://localhost:8000";
 const VAULT_BASE = "http://localhost:8001"; // Added the Vault URL
 
+// ---------------------------------------------------------
+// 1. CUSTOM ERROR HANDLING
+// ---------------------------------------------------------
+
+// Custom error class so we can pass the HTTP status code to the UI
+export class ApiError extends Error {
+  status: number;
+  constructor(status: number, message: string) {
+    super(message);
+    this.status = status;
+  }
+}
+
+// The UI translator function you will import into your React components
+export const getFriendlyErrorMessage = (error: unknown): string => {
+  if (error instanceof ApiError) {
+    
+    // 1. Try to extract the exact error message from FastAPI's JSON response
+    try {
+      const parsedError = JSON.parse(error.message);
+      if (parsedError.detail) {
+        // If it's a simple string (like your custom 403 deadline error)
+        if (typeof parsedError.detail === 'string') {
+          return parsedError.detail; 
+        } 
+        // If it's an array (like Pydantic form validation errors)
+        else if (Array.isArray(parsedError.detail)) {
+          return "Form error: " + parsedError.detail[0].msg;
+        }
+      }
+    } catch (e) {
+      // If the error message isn't JSON, we just ignore this and fall back to the defaults below
+    }
+
+    // 2. Fallback default messages if the backend didn't provide a custom "detail" string
+    switch (error.status) {
+      case 429:
+        return "You are submitting requests too quickly. For security, please wait a moment.";
+      case 422:
+        return "There is an issue with your form data. Please double-check your entries.";
+      case 403:
+        return "Action forbidden. You do not have permission.";
+      case 400:
+        return "Vault Error: Action failed. Please ensure passphrases or data are correct.";
+      default:
+        return `An unexpected server error occurred (Code: ${error.status}).`;
+    }
+  }
+  
+  // If it's a network error (server is down, CORS, etc.)
+  return "Our secure server is temporarily unreachable. Please check your connection.";
+};
+
+// ---------------------------------------------------------
+// 2. INTERFACES
+// ---------------------------------------------------------
+
 export interface BidPayload {
   auction_id: number;
   signature: string;
@@ -15,33 +72,36 @@ export interface Auction {
   deadline: string;
 }
 
-// Default request helper for the Main Ledger (Port 8000)
+// ---------------------------------------------------------
+// 3. MAIN LEDGER REQUESTS (PORT 8000)
+// ---------------------------------------------------------
+
+// Default request helper for the Main Ledger
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(`${API_BASE}${path}`, {
     headers: { "Content-Type": "application/json" },
     ...init,
   });
+  
   if (!res.ok) {
     const errText = await res.text();
-    throw new Error(`API Error ${res.status}: ${errText}`);
+    // Use our custom error class here!
+    throw new ApiError(res.status, errText);
   }
   return res.json() as Promise<T>;
 }
 
-// 1. GET requests (Ledger)
 export const fetchAuctions = () => request<Auction[]>("/auctions");
+
 export const fetchAuctionShares = (id: number) =>
   request<Array<{ name: string; encrypted_share: string }>>(`/auctions/${id}/shares`);
 
-// 2. POST /create_auction (Ledger)
 export const createAuction = (payload: unknown) =>
   request("/create_auction", { method: "POST", body: JSON.stringify(payload) });
 
-// 3. POST /submit_bid (Ledger)
 export const submitSecureBid = (payload: BidPayload) =>
   request("/submit_bid", { method: "POST", body: JSON.stringify(payload) });
 
-// 4. POST /open_bids/{id} (Ledger)
 export const openLedger = (
   id: number,
   payload: { shares: string[]; passwords: string[] }
@@ -51,11 +111,14 @@ export const openLedger = (
     { method: "POST", body: JSON.stringify(payload) }
   );
 
-// Add this right under your other GET requests
 export const fetchAuctionKeys = (id: number) =>
   request<{ master_pub_x: string; master_pub_y: string }>(`/auctions/${id}/keys`);
 
-// Update the Vault Proxy function to accept and forward the keys
+
+// ---------------------------------------------------------
+// 4. VAULT PROXY REQUESTS (PORT 8001)
+// ---------------------------------------------------------
+
 export const simulateLocalEncryption = async (
   auction_id: number,
   amount: number,
@@ -77,13 +140,13 @@ export const simulateLocalEncryption = async (
 
   if (!res.ok) {
     const errText = await res.text();
-    throw new Error(`Vault API Error ${res.status}: ${errText}`);
+    // Use our custom error class here too!
+    throw new ApiError(res.status, errText);
   }
   
   return res.json();
 };
 
-// Sends passwords directly to the Vault (Port 8001) so the Ledger never sees them!
 export const generateVaultKeys = async (passwords: string[]) => {
   const res = await fetch(`${VAULT_BASE}/generate_auction_keys`, {
     method: "POST",
@@ -93,7 +156,8 @@ export const generateVaultKeys = async (passwords: string[]) => {
   
   if (!res.ok) {
     const errText = await res.text();
-    throw new Error(`Vault Key Gen Error: ${errText}`);
+    // Use our custom error class here too!
+    throw new ApiError(res.status, errText);
   }
   return res.json();
 };
